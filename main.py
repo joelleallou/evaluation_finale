@@ -51,8 +51,8 @@ import requests
 # CONFIGURATION
 # =============================================================================
 
-BASE_URL = "http://192.168.1.100:8000"
-STUDENT_ID = "1234567"                    # Votre numero d'etudiant (7 chiffres)
+BASE_URL = "http://127.0.0.1:8000"
+STUDENT_ID = "202301758"                    # Votre numero d'etudiant (7 chiffres)
 TIMEOUT_HTTP = 2.0
 
 PERIODE_LECTURE = 0.5
@@ -72,8 +72,12 @@ def initialiser_capteur():
 
     Returns:
         adafruit_ahtx0.AHTx0: instance du capteur.
+
     """
-    pass
+    i2c = board.I2C()
+    capteur = adafruit_ahtx0.AHTx0(i2c)
+    return capteur
+    #pass
 
 
 def lire_capteur(capteur):
@@ -89,7 +93,11 @@ def lire_capteur(capteur):
     Returns:
         tuple[float, float]: (humidite en %, temperature en C).
     """
-    pass
+    humidite = float(capteur.relative_humidity)
+    temperature = float(capteur.temperature)
+    return humidite, temperature
+
+
 
 
 # =============================================================================
@@ -99,7 +107,15 @@ def lire_capteur(capteur):
 
 def verifier_sante(base_url):
     """GET /sante -- retourne True si le serveur repond avec ok."""
-    pass
+    try:
+        reponse = requests.get(f"{base_url}/sante", timeout=TIMEOUT_HTTP)
+        donnees = reponse.json()
+
+        return donnees["ok"] == True
+
+    except:
+        return False
+    
 
 
 def envoyer_mesure(base_url, valeur, duree_stable, temperature):
@@ -113,7 +129,20 @@ def envoyer_mesure(base_url, valeur, duree_stable, temperature):
         str | None: la decision ("sec"/"confort"/"humide"), ou None
         sur erreur.
     """
-    pass
+    payload = {
+        "valeur": valeur,
+        "duree_stable": duree_stable,
+        "temperature": temperature,
+        "student_id": STUDENT_ID
+    }
+    try:
+        reponse = requests.post(base_url + "/evaluer",json=payload,timeout=TIMEOUT_HTTP)
+
+        if reponse.status_code == 200:
+            donnees = reponse.json()
+            return donnees["decision"]
+    except:
+        return None
 
 
 # =============================================================================
@@ -127,7 +156,15 @@ def est_stable(historique, delta_max):
 
     Pour historique vide ou de longueur < 2 : False.
     """
-    pass
+    if len(historique) < 2:
+        return False 
+
+    difference = max(historique) - min(historique)
+
+    if difference <= delta_max:
+        return True
+    else:
+        return False
 
 
 def afficher(humidite, temperature, duree_stable, derniere_decision):
@@ -136,7 +173,17 @@ def afficher(humidite, temperature, duree_stable, derniere_decision):
     Format suggere :
         H= 48.5 % | T= 24.8 C | stable= 1.5 s | decision= confort
     """
-    pass
+#//r revenir a la ligne
+    if derniere_decision is None:
+        derniere_decision = "-"
+
+    print(
+        f"\rH={humidite:.1f} % | T={temperature:.1f} C | "
+        f"stable={duree_stable:.1f} s | decision={derniere_decision}",
+        end="",
+        flush=True
+    )
+    
 
 
 def boucle_principale(capteur, base_url):
@@ -145,18 +192,87 @@ def boucle_principale(capteur, base_url):
     Identique au sommatif : historique glissant, detection de
     stabilite, POST anti-rebond, affichage.
     """
-    pass
+    historique = []
+    derniere_decision = None
+
+    dernier_temps_lecture = 0
+    debut_stable = None
+    dernier_post = 0
+
+    while True:
+        maintenant = time.monotonic()
+
+        if maintenant - dernier_temps_lecture >= PERIODE_LECTURE:
+            dernier_temps_lecture = maintenant
+
+            try:
+                humidite, temperature = lire_capteur(capteur)
+
+                historique.append(humidite)
+
+                if len(historique) > TAILLE_HISTORIQUE:
+                    historique.pop(0)
+
+                if est_stable(historique, DELTA_STABILITE):
+                    if debut_stable is None:
+                        debut_stable = maintenant
+
+                    duree_stable = maintenant - debut_stable
+
+                else:
+                    debut_stable = None
+                    duree_stable = 0
+
+                if duree_stable >= DUREE_STABLE_REQUISE:
+                    if maintenant - dernier_post >= PERIODE_MIN_ENTRE_POSTS:
+                        decision = envoyer_mesure(
+                            base_url,
+                            humidite,
+                            duree_stable,
+                            temperature
+                        )
+
+                        dernier_post = maintenant
+
+                        if decision is not None:
+                            derniere_decision = decision
+
+                afficher(
+                    humidite,
+                    temperature,
+                    duree_stable,
+                    derniere_decision
+                )
+
+            except:
+                print("\nErreur pendant la boucle")
+
+        time.sleep(0.01)
+    
 
 
 # =============================================================================
 # POINT D'ENTREE
 # =============================================================================
 
-
 def main():
     """Init capteur + verif serveur + boucle. Arret propre sur Ctrl+C."""
-    pass
+    try:
+        capteur = initialiser_capteur()
+        print("Capteur AHT20 initialise.")
 
+        if verifier_sante(BASE_URL):
+            print("Serveur disponible.")
+        else:
+            print("Serveur non disponible.")
+
+        boucle_principale(capteur, BASE_URL)
+
+    except KeyboardInterrupt:
+        print("\nArret du programme.")
+
+    except:
+        print("Erreur dans le programme.")
 
 if __name__ == "__main__":
     main()
